@@ -253,7 +253,7 @@ additional safeguards, including content moderation, validation, and compliance
 checks, before broader use.
 
 ## Citation
-
+ 
 If you use SeFi-Image in your work, please cite the project report once it is
 available.
 
