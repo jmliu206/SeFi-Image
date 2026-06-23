@@ -254,8 +254,19 @@ checks, before broader use.
 
 ## Citation
  
-If you use SeFi-Image in your work, please cite the project report once it is
-available.
+If you use SeFi-Image in your work, please cite the project report:
+
+```
+@misc{sefiteam2026sefiimagetexttoimagefoundationmodel,
+      title={SeFi-Image: A Text-to-Image Foundation Model with Semantic-First Diffusion}, 
+      author={SeFi-Team},
+      year={2026},
+      eprint={2606.22568},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2606.22568}, 
+}
+```
 
 ## License
 
