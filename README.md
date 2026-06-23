@@ -7,6 +7,8 @@ Official inference repository for SeFi-Image text-to-image generation.
 <p>
   <a href="https://jmliu206.github.io/sefi-web/"><img alt="Project Page" src="https://img.shields.io/badge/Project-Page-5c6bc0" height="22" /></a>
   &nbsp;
+  <a href="https://arxiv.org/pdf/2606.22568"><img alt="Technical Report" src="https://img.shields.io/badge/Technical-Report-b31b1b" height="22" /></a>
+  &nbsp;
   <a href="https://huggingface.co/SeFi-Image"><img alt="Hugging Face Models" src="https://img.shields.io/badge/Hugging%20Face-Models-yellow" height="22" /></a>
   &nbsp;
   <a href="#model-zoo"><img alt="Model Zoo" src="https://img.shields.io/badge/Model%20Zoo-Checkpoints-blue" height="22" /></a>
