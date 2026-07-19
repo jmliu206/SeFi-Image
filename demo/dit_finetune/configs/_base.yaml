@@ -1,0 +1,91 @@
+seed: 4237
+
+model:
+  scale: 1b
+  base_checkpoint: SeFi-Image/SeFi-Image-1B-Base
+  base_revision: be4aed5d712818a17e0a29fa4cb3187323fde4b4
+  text_max_length: 512
+  semvae_checkpoint: SeFi-Image/SeFi-Image-SemVAE
+  semvae_revision: db50e4347a639b7f601b4768632c42a4638687a6
+  vfm_checkpoint: facebook/dinov2-with-registers-large
+  vfm_revision: e4c89a4e05589de9b3e188688a303d0f3c04d0f3
+
+data:
+  # The public release is pinned; build_demo_dataset.py can reproduce a local copy.
+  source: SeFi-Image/SeFi-Image-DiT-Finetune-Demo
+  revision: 475e616299b8c623c8a36ea5222a0e26bae91f06
+  split: train
+  cache_dir: outputs/cache/huggingface/datasets
+  resolution: 1024
+  batch_size: 1
+  num_workers: 2
+  shuffle: true
+  drop_last: false
+  sampler_seed: 4237
+  caption:
+    mode: weighted
+    weights:
+      enhanced_prompt: 4.0
+      prompt: 1.0
+
+tuning:
+  mode: lora
+  lora:
+    rank: 16
+    alpha: 16
+    dropout: 0.0
+
+training:
+  mixed_precision: bf16
+  total_steps: 10000
+  gradient_accumulation_steps: 1
+  gradient_checkpointing: true
+  gradient_clip: 1.0
+  optimizer:
+    learning_rate: 1.0e-4
+    weight_decay: 0.01
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+  scheduler:
+    name: constant_with_warmup
+    warmup_steps: 1000
+  conditioning:
+    drop_text_probability: 0.1
+    unconditional_prompt: ""
+  t_sampling:
+    scheme: logit_normal
+    logit_mean: -1.532
+    logit_std: 1.0
+    uniform_prob: 0.0
+    mode_scale: 1.29
+  loss:
+    weighting_scheme: none
+  sfd:
+    delta_t_min: 0.1
+    delta_t_max: 0.1
+    semantic_loss_weight: 1.0
+  repa:
+    enabled: false
+  ema:
+    enabled: false
+    decay: 0.9999
+    use_ema_warmup: false
+  deepspeed:
+    enabled: false
+    config_file: demo/dit_finetune/configs/deepspeed_zero2.json
+
+checkpointing:
+  save_every: 1000
+  save_final: true
+  output_dir: outputs/demo/dit_finetune/lora_1b
+
+export:
+  enabled: true
+  max_shard_size: 5GB
+  dtype: bf16
+
+logging:
+  log_every: 1
+
+distributed:
+  expected_world_size: 8

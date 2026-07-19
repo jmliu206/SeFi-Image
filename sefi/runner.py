@@ -17,6 +17,7 @@ from .builder import (
     _derive_semantic_channels,
     _derive_text_output_dim,
     _derive_texture_channels,
+    _resolve_transformer_scale,
     text_encoder_signature,
 )
 from .config import load_config
@@ -120,6 +121,23 @@ def _resolve_autoguidance_paths(
             "--autoguidance_checkpoint, or neither."
         )
     return config_path, checkpoint_path
+
+
+def _resolve_peft_adapter_directory(adapter_path: str) -> str:
+    """Resolve either a clean adapter root or a training checkpoint root."""
+
+    root = os.path.abspath(os.path.expanduser(str(adapter_path)))
+    if not os.path.isdir(root):
+        raise FileNotFoundError(f"PEFT adapter directory not found: {adapter_path}")
+
+    candidates = (root, os.path.join(root, "adapter"))
+    for candidate in candidates:
+        if os.path.isfile(os.path.join(candidate, "adapter_config.json")):
+            return candidate
+    raise FileNotFoundError(
+        "PEFT adapter_config.json not found. Expected it directly under "
+        f"{root} or under {os.path.join(root, 'adapter')}."
+    )
 
 
 def _validate_autoguidance_guidance_scale(enabled: bool, guidance_scale: float) -> None:
@@ -264,6 +282,8 @@ class SEFIInferenceRunner:
         debug_assert_schedule: bool = False,
         delta_t_override: Optional[float] = None,
         inference_dtype: Optional[str] = None,
+        transformer_checkpoint_path: Optional[str] = None,
+        adapter_path: Optional[str] = None,
         timestep_shift_alpha: float = 1.0,
         autoguidance_config_path: Optional[str] = None,
         autoguidance_checkpoint_path: Optional[str] = None,
@@ -276,6 +296,9 @@ class SEFIInferenceRunner:
         self.device = torch.device(device)
         self.component_dtype = _resolve_weight_dtype(config)
         self.weight_dtype = _resolve_weight_dtype(config, override=inference_dtype)
+        self.transformer_checkpoint_path = ""
+        self.adapter_path = ""
+        self.adapter_metadata = None
         (
             self.autoguidance_config_path,
             self.autoguidance_checkpoint_path,
@@ -349,6 +372,16 @@ class SEFIInferenceRunner:
         if checkpoint_path:
             self.load_checkpoint(checkpoint_path)
 
+        if transformer_checkpoint_path:
+            self.load_checkpoint(
+                transformer_checkpoint_path,
+                label="full transformer override",
+            )
+            self.transformer_checkpoint_path = str(transformer_checkpoint_path)
+
+        if adapter_path:
+            self.load_adapter(adapter_path)
+
         if self.autoguidance_enabled:
             self._load_autoguidance_model()
 
@@ -387,9 +420,9 @@ class SEFIInferenceRunner:
                 f"Got delta_t={self.delta_t:.6f}."
             )
 
-    def load_checkpoint(self, checkpoint_path: str):
+    def load_checkpoint(self, checkpoint_path: str, *, label: str = "checkpoint"):
         ckpt_file = _resolve_checkpoint_file(checkpoint_path)
-        print(f"Loading checkpoint from {ckpt_file}")
+        print(f"Loading {label} from {ckpt_file}")
         ckpt = _load_checkpoint_payload(ckpt_file)
         state_dict = _extract_state_dict(ckpt)
         state_dict = _strip_prefix_if_needed(state_dict, "module.")
@@ -399,6 +432,61 @@ class SEFIInferenceRunner:
             raise ValueError(f"Checkpoint is missing transformer keys: {missing[:10]}")
         if unexpected:
             raise ValueError(f"Checkpoint has unexpected transformer keys: {unexpected[:10]}")
+
+    def load_adapter(self, adapter_path: str) -> None:
+        """Attach a frozen PEFT adapter after loading the complete Base weights."""
+
+        from .training.lora import (
+            ADAPTER_METADATA_FILENAME,
+            load_lora_adapter,
+            read_lora_metadata,
+        )
+
+        resolved = _resolve_peft_adapter_directory(adapter_path)
+        metadata_path = os.path.join(resolved, ADAPTER_METADATA_FILENAME)
+        metadata = read_lora_metadata(resolved) if os.path.isfile(metadata_path) else None
+        if metadata is not None:
+            adapter_scale = str(metadata.get("scale", "")).strip().lower()
+            model_scale = str(_resolve_transformer_scale(self.config)).strip().lower()
+            if adapter_scale and adapter_scale != model_scale:
+                raise ValueError(
+                    "LoRA adapter/model scale mismatch: "
+                    f"adapter={adapter_scale}, model={model_scale}."
+                )
+            target_modules = metadata.get("target_modules", None)
+            target_count = metadata.get("target_count", None)
+            if target_modules is not None and not isinstance(target_modules, list):
+                raise ValueError("SEFI adapter metadata target_modules must be a list.")
+            if target_count is not None and target_modules is not None:
+                if int(target_count) != len(target_modules):
+                    raise ValueError(
+                        "SEFI adapter metadata target_count does not match "
+                        f"target_modules: {target_count} != {len(target_modules)}."
+                    )
+
+        transformer = load_lora_adapter(
+            self.transformer,
+            resolved,
+            is_trainable=False,
+        )
+        transformer = transformer.to(device=self.device, dtype=self.weight_dtype).eval()
+        transformer.requires_grad_(False)
+
+        if metadata is not None and metadata.get("target_modules") is not None:
+            injected = set(getattr(transformer, "targeted_module_names", ()))
+            expected = {str(name) for name in metadata["target_modules"]}
+            if injected != expected:
+                missing = sorted(expected - injected)
+                unexpected = sorted(injected - expected)
+                raise ValueError(
+                    "Loaded PEFT targets do not match SEFI adapter metadata: "
+                    f"missing={missing[:10]}, unexpected={unexpected[:10]}."
+                )
+
+        self.transformer = transformer
+        self.adapter_path = resolved
+        self.adapter_metadata = metadata
+        print(f"Loaded PEFT adapter from {resolved}")
 
     def _load_autoguidance_model(self) -> None:
         autoguidance_config = load_config(self.autoguidance_config_path)

@@ -30,11 +30,19 @@ class SEFIInferencePipeline:
         runner,
         checkpoint_path: str,
         checkpoint_uri: str,
+        transformer_checkpoint_path: str = "",
+        transformer_checkpoint_uri: str = "",
+        adapter_path: str = "",
+        adapter_uri: str = "",
     ) -> None:
         self.spec = spec
         self.runner = runner
         self.checkpoint_path = checkpoint_path
         self.checkpoint_uri = checkpoint_uri
+        self.transformer_checkpoint_path = transformer_checkpoint_path
+        self.transformer_checkpoint_uri = transformer_checkpoint_uri
+        self.adapter_path = adapter_path
+        self.adapter_uri = adapter_uri
 
     @classmethod
     def from_pretrained(
@@ -45,6 +53,8 @@ class SEFIInferencePipeline:
         config: str | Path | None = None,
         device: str | None = None,
         dtype: str | None = None,
+        transformer_checkpoint_path: str | Path | None = None,
+        adapter_path: str | Path | None = None,
         delta_t: float | None = None,
         timestep_shift_alpha: float | None = None,
         debug_assert_schedule: bool = False,
@@ -65,6 +75,28 @@ class SEFIInferencePipeline:
             checkpoint_uri=checkpoint_uri,
             checkpoint_path=local_checkpoint,
         )
+        local_transformer_checkpoint = ""
+        transformer_checkpoint_uri = ""
+        if transformer_checkpoint_path:
+            (
+                local_transformer_checkpoint,
+                transformer_checkpoint_uri,
+            ) = resolve_checkpoint_to_local(
+                checkpoint=str(transformer_checkpoint_path),
+                cache_dir=cache_dir,
+            )
+        local_adapter = ""
+        adapter_uri = ""
+        if adapter_path:
+            if spec.family != "base":
+                raise ValueError(
+                    "PEFT adapters are supported only with SeFi Base checkpoints; "
+                    f"got model family {spec.family!r}."
+                )
+            local_adapter, adapter_uri = resolve_checkpoint_to_local(
+                checkpoint=str(adapter_path),
+                cache_dir=cache_dir,
+            )
         resolved_device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         resolved_dtype = dtype or spec.default_dtype
         resolved_delta_t = delta_t if delta_t is not None else spec.default_delta_t
@@ -74,8 +106,7 @@ class SEFIInferencePipeline:
             else spec.default_timestep_shift_alpha
         )
 
-        runner = runner_cls(
-            resolved_config,
+        runner_kwargs = dict(
             checkpoint_path=local_checkpoint,
             device=resolved_device,
             debug_assert_schedule=debug_assert_schedule,
@@ -87,12 +118,27 @@ class SEFIInferencePipeline:
             guidance_interval_sigma_lo=guidance_interval_sigma_lo,
             guidance_interval_sigma_hi=guidance_interval_sigma_hi,
         )
+        # Keep the no-adapter constructor call byte-for-byte compatible with
+        # older runtime implementations that do not accept this new keyword.
+        if local_adapter:
+            runner_kwargs["adapter_path"] = local_adapter
+        if local_transformer_checkpoint:
+            runner_kwargs["transformer_checkpoint_path"] = local_transformer_checkpoint
+
+        runner = runner_cls(
+            resolved_config,
+            **runner_kwargs,
+        )
 
         return cls(
             spec=spec,
             runner=runner,
             checkpoint_path=local_checkpoint,
             checkpoint_uri=checkpoint_uri,
+            transformer_checkpoint_path=local_transformer_checkpoint,
+            transformer_checkpoint_uri=transformer_checkpoint_uri,
+            adapter_path=local_adapter,
+            adapter_uri=adapter_uri,
         )
 
     def __call__(

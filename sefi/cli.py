@@ -31,6 +31,22 @@ def _parse_args() -> argparse.Namespace:
         default="",
         help="Optional config path. Defaults to sefi_config.yaml under --checkpoint.",
     )
+    parser.add_argument(
+        "--adapter-path",
+        default="",
+        help=(
+            "Optional PEFT adapter directory or Hugging Face repo id. "
+            "The Base checkpoint is loaded first."
+        ),
+    )
+    parser.add_argument(
+        "--transformer-checkpoint",
+        default="",
+        help=(
+            "Optional full transformer override directory or Hugging Face repo id. "
+            "The self-contained --checkpoint Base is loaded first."
+        ),
+    )
     parser.add_argument("--steps", type=int, default=None)
     parser.add_argument("--guidance-scale", type=float, default=None)
     parser.add_argument("--height", type=int, default=None)
@@ -69,6 +85,8 @@ def main() -> None:
         config=args.config or None,
         device=args.device or str(device),
         dtype=args.dtype or None,
+        transformer_checkpoint_path=args.transformer_checkpoint or None,
+        adapter_path=args.adapter_path or None,
         delta_t=args.delta_t,
         timestep_shift_alpha=args.timestep_shift_alpha,
         debug_assert_schedule=args.debug_assert_schedule,
@@ -92,18 +110,25 @@ def main() -> None:
     wait_for_everyone(accelerator)
 
     if is_main:
+        manifest = {
+            "model": pipe.spec.name,
+            "model_spec": asdict(pipe.spec),
+            "checkpoint_path": pipe.checkpoint_path,
+            "checkpoint_uri": pipe.checkpoint_uri,
+            "num_prompts": len(prompts),
+            "num_images": len(items),
+            "seed": args.seed,
+            "world_size": world_size,
+        }
+        if pipe.adapter_path:
+            manifest["adapter_path"] = pipe.adapter_path
+            manifest["adapter_uri"] = pipe.adapter_uri
+        if pipe.transformer_checkpoint_path:
+            manifest["transformer_checkpoint_path"] = pipe.transformer_checkpoint_path
+            manifest["transformer_checkpoint_uri"] = pipe.transformer_checkpoint_uri
         write_manifest(
             args.output_dir,
-            {
-                "model": pipe.spec.name,
-                "model_spec": asdict(pipe.spec),
-                "checkpoint_path": pipe.checkpoint_path,
-                "checkpoint_uri": pipe.checkpoint_uri,
-                "num_prompts": len(prompts),
-                "num_images": len(items),
-                "seed": args.seed,
-                "world_size": world_size,
-            },
+            manifest,
         )
 
 
