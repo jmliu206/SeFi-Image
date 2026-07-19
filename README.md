@@ -142,6 +142,15 @@ images[0].save("sample.png")
 For Base and RL checkpoints, omit `num_inference_steps` and `guidance_scale` to
 use the checkpoint defaults.
 
+## Reference Demos
+
+User-facing examples live under [`demo/`](demo/README.md):
+
+- [`demo/semvae/`](demo/semvae/README.md) extracts DINOv2 patch features,
+  compresses them into SemVAE semantic latents, and validates reconstruction
+  with cosine similarity. Its tiny public fixture is hosted in
+  [SeFi-Image-SemVAE-Demo](https://huggingface.co/datasets/SeFi-Image/SeFi-Image-SemVAE-Demo).
+
 ## Installation
 
 Create an environment and install the runtime dependencies. The PyTorch command
