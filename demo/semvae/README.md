@@ -11,9 +11,17 @@ code for extracting and compressing semantic image representations.
 
 ## Setup
 
-Install the dependencies from the repository [installation guide](../../README.md#installation).
-The demo uses PyTorch, torchvision, Transformers, Hugging Face Hub, and Pillow;
-no training dependencies are required.
+From the repository root, create a Python 3.11 environment and install only the
+demo dependencies (choose the PyTorch wheel index that matches your machine):
+
+```bash
+python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+python -m pip install transformers huggingface_hub pillow
+```
+
+No DiT training dependencies are required. The checked environment used PyTorch
+2.8.0, torchvision 0.23.0, Transformers 4.57.1, Hugging Face Hub 0.36.0, and
+Pillow 11.3.0.
 
 Download one image from the dedicated public demo dataset:
 

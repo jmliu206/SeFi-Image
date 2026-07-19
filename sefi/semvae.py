@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -165,6 +166,8 @@ class DINOv2FeatureExtractor(nn.Module):
         self.checkpoint = str(checkpoint_path) if checkpoint_path.exists() else str(checkpoint)
         self.device = _resolve_device(device)
         self.image_size = int(image_size)
+        if self.image_size <= 0:
+            raise ValueError(f"image_size must be positive, got {self.image_size}.")
         self.dino_size = self.image_size * 7 // 8
         if self.dino_size % self.patch_size != 0:
             raise ValueError(
@@ -200,17 +203,101 @@ class DINOv2FeatureExtractor(nn.Module):
             )
         self.num_register_tokens = int(register_tokens)
 
-    def preprocess(self, image: Image.Image) -> Tensor:
-        try:
-            from torchvision import transforms
-        except ImportError as exc:
-            raise RuntimeError("DINOv2 preprocessing requires torchvision.") from exc
-
         mean = getattr(self.processor, "image_mean", None)
         std = getattr(self.processor, "image_std", None)
         if mean is None or std is None or len(mean) != 3 or len(std) != 3:
             raise ValueError("DINOv2 processor must provide three-channel image_mean/image_std.")
+        self.register_buffer(
+            "image_mean",
+            torch.tensor(mean, dtype=torch.float32).reshape(1, 3, 1, 1),
+            persistent=False,
+        )
+        self.register_buffer(
+            "image_std",
+            torch.tensor(std, dtype=torch.float32).reshape(1, 3, 1, 1),
+            persistent=False,
+        )
 
+    def preprocess(self, image: Image.Image) -> Tensor:
+        """Preprocess one PIL image using the legacy 256px-compatible path."""
+
+        return self.preprocess_batch([image])[0]
+
+    def preprocess_batch(
+        self,
+        images: Sequence[Image.Image] | Tensor,
+        *,
+        input_range: str = "zero_one",
+    ) -> Tensor:
+        """Preprocess a PIL sequence or an RGB tensor batch for DINOv2.
+
+        Tensor input accepts ``[C,H,W]`` or ``[B,C,H,W]``. ``input_range`` must
+        explicitly describe whether it is in ``[0,1]`` or ``[-1,1]``; the
+        latter matches the shared DiT texture input. Both paths apply the same
+        resize-shortest-side, center-crop framing before resizing to the DINO
+        patch grid.
+        """
+
+        try:
+            from torchvision import transforms
+            from torchvision.transforms import functional as tvf
+        except ImportError as exc:
+            raise RuntimeError("DINOv2 preprocessing requires torchvision.") from exc
+
+        if torch.is_tensor(images):
+            pixel_values = images
+            if pixel_values.ndim == 3:
+                pixel_values = pixel_values.unsqueeze(0)
+            if pixel_values.ndim != 4 or pixel_values.shape[1] != 3:
+                raise ValueError(
+                    "Tensor images must have shape [C,H,W] or [B,C,H,W] with C=3, "
+                    f"got {tuple(pixel_values.shape)}."
+                )
+            pixel_values = pixel_values.float()
+            if not torch.isfinite(pixel_values).all():
+                raise ValueError("Tensor images contain NaN or Inf values.")
+            if input_range == "minus_one_one":
+                pixel_values = (pixel_values + 1.0) / 2.0
+            elif input_range != "zero_one":
+                raise ValueError(
+                    "input_range must be 'zero_one' or 'minus_one_one', "
+                    f"got {input_range!r}."
+                )
+            if pixel_values.numel() and (
+                pixel_values.min().item() < -1e-4 or pixel_values.max().item() > 1.0001
+            ):
+                raise ValueError(
+                    f"Tensor values do not match input_range={input_range!r}; "
+                    f"observed [{pixel_values.min().item():.4f}, "
+                    f"{pixel_values.max().item():.4f}]."
+                )
+            pixel_values = tvf.resize(
+                pixel_values,
+                self.image_size,
+                interpolation=transforms.InterpolationMode.BICUBIC,
+                antialias=True,
+            )
+            pixel_values = tvf.center_crop(
+                pixel_values,
+                [self.image_size, self.image_size],
+            )
+            pixel_values = tvf.resize(
+                pixel_values,
+                [self.dino_size, self.dino_size],
+                interpolation=transforms.InterpolationMode.BICUBIC,
+                antialias=True,
+            )
+            mean = self.image_mean.to(pixel_values.device, pixel_values.dtype)
+            std = self.image_std.to(pixel_values.device, pixel_values.dtype)
+            return (pixel_values - mean) / std
+
+        image_list = list(images)
+        if not image_list:
+            raise ValueError("At least one image is required for batch preprocessing.")
+        if not all(isinstance(image, Image.Image) for image in image_list):
+            raise TypeError("PIL batch preprocessing requires only PIL.Image.Image values.")
+        mean = self.image_mean.flatten().tolist()
+        std = self.image_std.flatten().tolist()
         transform = transforms.Compose(
             [
                 transforms.Resize(
@@ -226,11 +313,15 @@ class DINOv2FeatureExtractor(nn.Module):
                 transforms.Normalize(mean=mean, std=std),
             ]
         )
-        return transform(image.convert("RGB"))
+        return torch.stack([transform(image.convert("RGB")) for image in image_list])
 
     @torch.no_grad()
     def forward(self, pixel_values: Tensor) -> Tensor:
         pixel_values = pixel_values.to(self.device, dtype=torch.float32)
+        if pixel_values.ndim != 4 or pixel_values.shape[1] != 3:
+            raise ValueError(
+                f"DINO pixel values must be [B,3,H,W], got {tuple(pixel_values.shape)}."
+            )
         input_h, input_w = (int(value) for value in pixel_values.shape[-2:])
         if input_h % self.patch_size or input_w % self.patch_size:
             raise ValueError(
@@ -257,6 +348,15 @@ class SemVAEOutput:
     normalized_latents: Tensor
     reconstruction: Tensor
     token_cosine: Tensor
+
+
+@dataclass
+class SemVAEEncodedBatch:
+    """Training-oriented batch output without reconstruction overhead."""
+
+    features: Tensor
+    latents: Tensor
+    normalized_latents: Tensor
 
 
 class SemVAEFeatureCodec:
@@ -289,6 +389,7 @@ class SemVAEFeatureCodec:
         vfm_checkpoint: str = DEFAULT_DINO_CHECKPOINT,
         cache_dir: str | Path = "outputs/model_weights/semvae",
         device: str | torch.device | None = None,
+        image_size: int = 256,
     ) -> "SemVAEFeatureCodec":
         resolved_device = _resolve_device(device)
         checkpoint_path, stats_path, _ = _resolve_artifact_paths(
@@ -315,6 +416,7 @@ class SemVAEFeatureCodec:
             vfm_checkpoint,
             device=resolved_device,
             cache_dir=cache_dir,
+            image_size=image_size,
         )
         return cls(
             feature_extractor=feature_extractor,
@@ -328,6 +430,24 @@ class SemVAEFeatureCodec:
     @property
     def compression_ratio(self) -> float:
         return self.semvae.input_dim / self.semvae.bottleneck_dim
+
+    @property
+    def image_size(self) -> int:
+        return self.feature_extractor.image_size
+
+    @property
+    def dino_size(self) -> int:
+        return self.feature_extractor.dino_size
+
+    def preprocess_batch(
+        self,
+        images: Sequence[Image.Image] | Tensor,
+        *,
+        input_range: str = "zero_one",
+    ) -> Tensor:
+        """Prepare a PIL/tensor image batch for the frozen DINO encoder."""
+
+        return self.feature_extractor.preprocess_batch(images, input_range=input_range)
 
     @torch.no_grad()
     def extract_features(self, pixel_values: Tensor) -> Tensor:
@@ -355,6 +475,35 @@ class SemVAEFeatureCodec:
         return normalized_latents * std + mean
 
     @torch.no_grad()
+    def encode_batch(self, pixel_values: Tensor, *, sample: bool = False) -> SemVAEEncodedBatch:
+        """Extract, compress, and normalize a preprocessed DINO tensor batch."""
+
+        features = self.extract_features(pixel_values)
+        latents = self.compress_features(features, sample=sample)
+        normalized_latents = self.normalize_latents(latents)
+        tensors = (features, latents, normalized_latents)
+        if not all(torch.isfinite(tensor).all() for tensor in tensors):
+            raise ValueError("SemVAE encoded batch contains NaN or Inf values.")
+        return SemVAEEncodedBatch(
+            features=features,
+            latents=latents,
+            normalized_latents=normalized_latents,
+        )
+
+    @torch.no_grad()
+    def encode_images(
+        self,
+        images: Sequence[Image.Image] | Tensor,
+        *,
+        input_range: str = "zero_one",
+        sample: bool = False,
+    ) -> SemVAEEncodedBatch:
+        """Preprocess and encode an image batch without decoding features."""
+
+        pixel_values = self.preprocess_batch(images, input_range=input_range)
+        return self.encode_batch(pixel_values, sample=sample)
+
+    @torch.no_grad()
     def decompress_latents(self, latents: Tensor, *, normalized: bool = False) -> Tensor:
         latents = latents.to(self.device, dtype=torch.float32)
         if normalized:
@@ -364,10 +513,11 @@ class SemVAEFeatureCodec:
     @torch.no_grad()
     def encode_image(self, image: Image.Image) -> SemVAEOutput:
         pixel_values = self.feature_extractor.preprocess(image).unsqueeze(0)
-        features = self.extract_features(pixel_values)
-        latents = self.compress_features(features, sample=False)
+        encoded = self.encode_batch(pixel_values, sample=False)
+        features = encoded.features
+        latents = encoded.latents
         reconstruction = self.decompress_latents(latents)
-        normalized_latents = self.normalize_latents(latents)
+        normalized_latents = encoded.normalized_latents
         token_cosine = F.cosine_similarity(
             reconstruction.float(),
             features.float(),

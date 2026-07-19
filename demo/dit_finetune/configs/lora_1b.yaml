@@ -1,0 +1,13 @@
+defaults:
+  - _base.yaml
+
+model:
+  scale: 1b
+  base_checkpoint: SeFi-Image/SeFi-Image-1B-Base
+  base_revision: be4aed5d712818a17e0a29fa4cb3187323fde4b4
+
+tuning:
+  mode: lora
+
+checkpointing:
+  output_dir: outputs/demo/dit_finetune/lora_1b

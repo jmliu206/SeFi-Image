@@ -1,0 +1,21 @@
+defaults:
+  - _base.yaml
+
+model:
+  scale: 1b
+  base_checkpoint: SeFi-Image/SeFi-Image-1B-Base
+  base_revision: be4aed5d712818a17e0a29fa4cb3187323fde4b4
+
+tuning:
+  mode: full
+
+training:
+  optimizer:
+    learning_rate: 1.0e-5
+  ema:
+    enabled: true
+  deepspeed:
+    enabled: true
+
+checkpointing:
+  output_dir: outputs/demo/dit_finetune/full_1b_zero2

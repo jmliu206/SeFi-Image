@@ -1,3 +1,4 @@
+import inspect
 import subprocess
 import sys
 import textwrap
@@ -6,6 +7,7 @@ from types import SimpleNamespace
 
 import torch
 import torch.nn as nn
+from PIL import Image
 
 from sefi.modeling.semvae import SemVAEConfig, SemanticVariationalAutoEncoder
 from sefi.semvae import (
@@ -171,3 +173,92 @@ def test_latent_stats_and_normalization_round_trip(tmp_path):
     reconstructed = codec.denormalize_latents(codec.normalize_latents(latents))
 
     assert torch.allclose(reconstructed, latents, atol=1e-6, rtol=1e-5)
+
+
+def test_semvae_from_pretrained_keeps_legacy_256_default():
+    parameter = inspect.signature(SemVAEFeatureCodec.from_pretrained).parameters["image_size"]
+
+    assert parameter.default == 256
+
+
+def _bare_preprocessor(image_size: int) -> DINOv2FeatureExtractor:
+    extractor = DINOv2FeatureExtractor.__new__(DINOv2FeatureExtractor)
+    nn.Module.__init__(extractor)
+    extractor.image_size = image_size
+    extractor.dino_size = image_size * 7 // 8
+    extractor.register_buffer(
+        "image_mean",
+        torch.tensor([0.485, 0.456, 0.406]).reshape(1, 3, 1, 1),
+        persistent=False,
+    )
+    extractor.register_buffer(
+        "image_std",
+        torch.tensor([0.229, 0.224, 0.225]).reshape(1, 3, 1, 1),
+        persistent=False,
+    )
+    return extractor
+
+
+def test_dino_batch_preprocess_supports_1024_pil_and_texture_tensors():
+    extractor = _bare_preprocessor(1024)
+    images = [Image.new("RGB", (1280, 1024), (64, 128, 192)) for _ in range(2)]
+
+    pil_batch = extractor.preprocess_batch(images)
+    texture_batch = torch.stack(
+        [
+            torch.full((3, 1024, 1024), -0.5),
+            torch.full((3, 1024, 1024), 0.5),
+        ]
+    )
+    tensor_batch = extractor.preprocess_batch(
+        texture_batch,
+        input_range="minus_one_one",
+    )
+
+    assert pil_batch.shape == (2, 3, 896, 896)
+    assert tensor_batch.shape == (2, 3, 896, 896)
+    assert torch.isfinite(pil_batch).all()
+    assert torch.isfinite(tensor_batch).all()
+
+
+class _FakeBatchExtractor(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.device = torch.device("cpu")
+        self.image_size = 1024
+        self.dino_size = 896
+
+    def forward(self, pixel_values):
+        batch = pixel_values.shape[0]
+        base = pixel_values.mean(dim=(1, 2, 3)).reshape(batch, 1, 1)
+        return base.expand(batch, 16, 8) + torch.arange(8).reshape(1, 1, 8)
+
+
+def test_semvae_training_batch_api_skips_decode_and_normalizes(tmp_path):
+    config = SemVAEConfig(
+        input_dim=8,
+        bottleneck_dim=4,
+        hidden_dim=8,
+        num_heads=2,
+        num_blocks=1,
+    )
+    codec = SemVAEFeatureCodec(
+        feature_extractor=_FakeBatchExtractor(),
+        semvae=SemanticVariationalAutoEncoder(config).eval(),
+        latent_mean=torch.zeros(1, 1, 4),
+        latent_std=torch.full((1, 1, 4), 2.0),
+        checkpoint_path=tmp_path / "checkpoint.pt",
+        stats_path=tmp_path / "stats.pt",
+    )
+
+    encoded = codec.encode_batch(torch.randn(2, 3, 896, 896), sample=False)
+
+    assert codec.image_size == 1024
+    assert codec.dino_size == 896
+    assert encoded.features.shape == (2, 16, 8)
+    assert encoded.latents.shape == (2, 16, 4)
+    assert torch.equal(encoded.normalized_latents, encoded.latents / 2)
+    assert all(
+        torch.isfinite(tensor).all()
+        for tensor in (encoded.features, encoded.latents, encoded.normalized_latents)
+    )

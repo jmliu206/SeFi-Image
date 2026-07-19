@@ -8,6 +8,7 @@ Run all commands from the repository root so Python can import `sefi`.
 | Demo | Purpose | Status |
 | :--- | :--- | :--- |
 | [SemVAE](semvae/README.md) | Extract visual features, compress them into semantic latents, and check feature reconstruction with cosine similarity. | Runnable |
+| [DiT fine-tuning](dit_finetune/README.md) | Fixed-1024 paired LoRA or full DiT tuning with 1B/2B/5B configs. | Runnable |
 
 ## Installation
 
@@ -15,7 +16,7 @@ Start with the environment in the repository [README](../README.md#installation)
 Individual demos document any additional dependencies they need.
 
 Model weights may be loaded from Hugging Face or from a local checkpoint. If a
-repository requires authentication, log in once with `huggingface-cli login`.
+repository requires authentication, log in once with `hf auth login`.
 
 ## Public Files and Local Outputs
 
@@ -26,9 +27,13 @@ weights, input data, metrics, latents, logs, and checkpoints belong under
 ```text
 outputs/
 ├── demo_data/
-│   └── semvae/
+│   ├── semvae/
+│   └── fine_t2i_upstream/
 ├── demo/
-│   └── semvae/
+│   ├── semvae/
+│   └── dit_finetune/
+├── hf_datasets/
+│   └── SeFi-Image-DiT-Finetune-Demo/
 └── model_weights/
 ```
 
@@ -38,3 +43,6 @@ repository:
 - [SeFi-Image-SemVAE-Demo](https://huggingface.co/datasets/SeFi-Image/SeFi-Image-SemVAE-Demo)
   is published and contains eight standalone Fine-T2I synthetic smoke-test
   images plus an embedded-image Parquet `test` split.
+- [SeFi-Image-DiT-Finetune-Demo](https://huggingface.co/datasets/SeFi-Image/SeFi-Image-DiT-Finetune-Demo)
+  is published with 56 training and 8 validation image-text pairs. Released
+  configs pin its immutable Hub revision.
