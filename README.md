@@ -157,7 +157,7 @@ pip install diffusers transformers accelerate safetensors huggingface_hub omegac
 
 ## Batch and Multi-GPU
 
-Generate from a text file with one prompt per line:
+Generate from a text file with one prompt per line: 
 
 ```bash
 python inference.py \
