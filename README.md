@@ -270,7 +270,7 @@ If you use SeFi-Image in your work, please cite the project report:
 ```
 @misc{sefiteam2026sefiimagetexttoimagefoundationmodel,
       title={SeFi-Image: A Text-to-Image Foundation Model with Semantic-First Diffusion}, 
-      author={SeFi-Team},
+      author={Ruoyu Feng and Jinming Liu and Yuqi Wang and Xin Cheng and Boyuan Liu and Shanglin Li and Hanshen Zhu and Wenfeng Lin and Mingyu Guo and Xin Jin},
       year={2026},
       eprint={2606.22568},
       archivePrefix={arXiv},
